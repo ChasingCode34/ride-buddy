@@ -8,6 +8,12 @@ from sqlalchemy.orm import Session
 from twilio.twiml.messaging_response import MessagingResponse
 from database import Base, engine, get_db
 from models import User
+import os
+from dotenv import load_dotenv
+import smtplib
+from email.message import EmailMessage
+
+load_dotenv()  # loads variables from a .env file into os.environ
 
 # -----------------------
 # DB setup: create tables
@@ -28,18 +34,52 @@ def generate_otp() -> str:
 
 def send_verification_email(emory_email: str, code: str):
     """
-    Stub for sending the email containing the OTP code.
-    Replace this with real email sending (SMTP, SendGrid, SES, etc.).
-    For now, just log it so you can see it in dev.
+    Send the verification code to the user's Emory email using SMTP.
+
+    Expects these env vars to be set (e.g. in a .env file):
+      SMTP_HOST   - e.g. "smtp.gmail.com"
+      SMTP_PORT   - e.g. "587"
+      SMTP_USER   - the login username (e.g. your email)
+      SMTP_PASS   - the SMTP/app password
+      FROM_EMAIL  - "From" address (often same as SMTP_USER)
     """
-    print(f"[DEBUG] Would send verification email to {emory_email} with code: {code}")
-    # Example (pseudo):
-    # import smtplib
-    # smtp = smtplib.SMTP(os.getenv("SMTP_HOST"), 587)
-    # smtp.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
-    # msg = f"Subject: TrypSync Verification Code\n\nYour code is {code}"
-    # smtp.sendmail(os.getenv("FROM_EMAIL"), [emory_email], msg)
-    # smtp.quit()
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    from_email = os.getenv("FROM_EMAIL", smtp_user)
+
+    if not smtp_user or not smtp_pass:
+        # Fail gracefully in dev if not configured
+        print(
+            f"[EMAIL-DEBUG] Missing SMTP_USER/SMTP_PASS; "
+            f"would have sent code {code} to {emory_email}"
+        )
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = "Your TrypSync Verification Code"
+    msg["From"] = from_email
+    msg["To"] = emory_email
+    msg.set_content(
+        f"""Hi,
+
+Your TrypSync verification code is: {code}
+
+Enter this code in WhatsApp to complete verification.
+If you did not request this, you can ignore this email.
+
+Thanks,
+TrypSync
+"""
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+
+    print(f"[EMAIL] Sent verification code to {emory_email}")
 
 
 # -----------------------
