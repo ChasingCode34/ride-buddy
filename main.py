@@ -8,11 +8,9 @@ from sqlalchemy.orm import Session
 from twilio.twiml.messaging_response import MessagingResponse
 from database import Base, engine, get_db
 from models import User
-import os
 from dotenv import load_dotenv
 import smtplib
 from email.message import EmailMessage
-
 
 load_dotenv()  # loads variables from a .env file into os.environ
 
@@ -122,7 +120,7 @@ async def sms_webhook(
                     "Please reply with a valid Emory email ending in @emory.edu.\n\n"
                     "Example: akhil.arularasu@emory.edu"
                 )
-                return str(resp)
+                return Response(content=str(resp), media_type="application/xml")
 
 
             # Save email & generate OTP
@@ -138,7 +136,7 @@ async def sms_webhook(
                 f"Thanks! We sent a 6-digit code to {user.emory_email}. "
                 "Reply with that code here to verify your account."
             )
-            return str(resp)
+            return Response(content=str(resp), media_type="application/xml")
 
         # CASE B (simplified): Email is known, expecting this SMS to be the OTP.
         # No separate regeneration branch; this keeps state logic tight.
@@ -151,13 +149,13 @@ async def sms_webhook(
                 "your ride requests from Emory to ATL airport.\n\n"
                 "Example: '8:30pm, 3 people'."
             )
-            return str(resp)
+            return Response(content=str(resp), media_type="application/xml")
         else:
             resp.message(
                 "That code is incorrect. Please reply with the 6-digit code we sent "
                 f"to {user.emory_email}."
             )
-            return str(resp)
+            return Response(content=str(resp), media_type="application/xml")
 
     # 3) Already verified → treat SMS as ride request (for now: placeholder)
     #    Later, you'll parse `body` into requested_time + party_size and write a RideRequest row.
@@ -165,5 +163,5 @@ async def sms_webhook(
         "You're already verified ✅. "
         "Send your ride request like: '8:30pm, 3 people' and we'll match you."
     )
-    return str(resp)
+    return Response(content=str(resp), media_type="application/xml")
 
