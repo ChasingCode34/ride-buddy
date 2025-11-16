@@ -10,7 +10,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     # Phone number from Twilio "From" field (e.g., "+14045551234")
-    phone_number = Column(String(20), unique=True, nullable=False, index=True)
+    phone_number = Column(String(50), unique=True, nullable=False, index=True)
     # New: full name that user types once during onboarding
     full_name = Column(String(255), nullable=True)
     # Emory email typed by user via SMS, must end with @emory.edu (enforced in code)

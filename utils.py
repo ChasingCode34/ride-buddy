@@ -144,7 +144,7 @@ def parse_ride_with_gemini(message: str) -> Optional[dict]:
     current_year = now.year
 
     system_prompt = f"""
-You are a strict JSON parser for a ride-sharing service between two locations:
+You are a strict, deterministic JSON parser for a ride-sharing service between two locations:
 
   1. "Emory University"
   2. "Hartsfield-Jackson Atlanta International Airport"
@@ -154,40 +154,91 @@ The user will send a short text message describing a ride, for example:
 - "leaving 3 pm on 11/16 from emory to airport"
 - "airport to emory tomorrow 9pm"
 - "11/23 8pm emory → atl airport"
+- "emory to hartsfield jackson, a quarter of an hour before noon next friday"
+- "next saturday 5pm from airport to emory"
 
 You MUST extract:
   - a single departure datetime (assume the timezone is America/New_York)
   - a FROM location
   - a TO location
 
-Rules:
-  - If the message says "emory", "emory univ", or similar, map it to "Emory University".
-  - If the message says "airport", "atl airport", "hartsfield", or "jackson",
+Current context:
+  - Today's date is {current_date_str} (YYYY-MM-DD).
+  - The current year is {current_year}.
+  - Interpret all dates/times in America/New_York.
+
+Location mapping rules (very strict):
+  - If the message says "emory", "emory univ", "emory university", or similar,
+    map it to "Emory University".
+  - If the message says "airport", "atl airport", "atl", "hartsfield",
+    "hartsfield-jackson", or "jackson",
     map it to "Hartsfield-Jackson Atlanta International Airport".
-  - If both sides are mentioned, the first mentioned is the FROM location,
-    and the second is the TO location.
-  - If only one location is mentioned:
+  - If both locations are mentioned, the FIRST mentioned is the FROM location
+    and the SECOND mentioned is the TO location.
+  - If only one location is clearly mentioned:
       - "from emory" or "leaving emory" => FROM: Emory University, TO: Airport
       - "to emory" or "going to emory"  => FROM: Airport, TO: Emory University
-  - If the year is omitted in the date, assume the current year: {current_year}.
-  - If the message uses relative words like "today" or "tomorrow", interpret them
-    relative to today's date: {current_date_str}.
   - The only valid output locations are:
       - "Emory University"
       - "Hartsfield-Jackson Atlanta International Airport"
 
-Output format:
+Date and time interpretation rules (VERY IMPORTANT):
+
+  - If the year is omitted in the date, assume the current year: {current_year}.
+  - If the message uses relative words:
+      - "today"    => {current_date_str}
+      - "tomorrow" => the day after {current_date_str}
+  - If the message mentions an explicit weekday name
+      (monday, tuesday, wednesday, thursday, friday, saturday, sunday):
+
+      • "this <weekday>":
+          - Means the first occurrence of that weekday ON OR AFTER today.
+          - For example, if today is Friday and the user says "this Friday",
+            use TODAY.
+
+      • "next <weekday>":
+          - Means the first occurrence of that weekday STRICTLY AFTER
+            "this <weekday>" (i.e., 7 days after the "this" date).
+          - For example, if today is Sunday 2025-11-16 and the user says
+            "next Saturday", that is Saturday 2025-11-22 (7 days after
+            "this Saturday").
+
+      • The departure_time you return MUST fall on the correct weekday
+        if a weekday word is present. If your initially inferred date
+        does not match that weekday, adjust it forward in time until it does.
+
+  - For phrases like "a quarter of an hour before noon":
+      - Interpret as 11:45 AM.
+  - If a time of day is requested (e.g., "5pm", "in the morning",
+    "at noon"), convert it to a specific HH:MM:SS in 24-hour time.
+
+  - The departure_time MUST NOT be more than 60 days in the future
+    relative to {current_date_str} unless the user explicitly specifies
+    a later month and day.
+
+  - The departure_time MUST NOT be in the past relative to
+    {current_date_str} when the user uses words like "today", "tomorrow",
+    "this <weekday>", or "next <weekday>".
+
+If you cannot confidently determine a valid departure datetime AND both locations,
+set "success" to false and give a short explanation in "reason".
+
+Output format (must be EXACT):
+
   - Output ONLY a single JSON object with EXACTLY these fields:
     {{
       "success": true or false,
-      "reason": "<short reason if success is false>",
+      "reason": "<short reason if success is false, otherwise null>",
       "departure_time": "YYYY-MM-DDTHH:MM:SS" or null,
-      "from_location": "<one of the allowed locations or null>",
-      "to_location": "<one of the allowed locations or null>"
+      "from_location": "Emory University" or
+                       "Hartsfield-Jackson Atlanta International Airport" or null,
+      "to_location":   "Emory University" or
+                       "Hartsfield-Jackson Atlanta International Airport" or null
     }}
 
 Do NOT include any additional keys.
-Do NOT include any explanation outside the JSON.
+Do NOT include any comments.
+Do NOT include any text before or after the JSON.
 """
 
     user_prompt = f"User message: {message!r}"
@@ -392,12 +443,7 @@ def create_ride_and_try_match(db: Session, user: User, body: str) -> str:
         except Exception as e:
             print("[MATCH DM] Failed to send intro messages:", e)
 
-        return (
-            "Good news! 🎉 We found another student with a similar ride.\n\n"
-            f"Your ride: {format_departure_time(ride_dt)} "
-            f"{from_location} → {to_location}.\n"
-            "We just sent you both a message with each other's contact info so you can coordinate."
-        )
+        return None
     else:
         return (
             "Got it ✅ Your ride request is saved.\n\n"

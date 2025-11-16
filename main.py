@@ -6,15 +6,13 @@ from fastapi import FastAPI, Depends, Form
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from twilio.twiml.messaging_response import MessagingResponse
-from database import Base, engine, get_db
-from models import User
+from database import Base, engine, get_db, init_db
 from dotenv import load_dotenv
 import smtplib
 from email.message import EmailMessage
 import re
-from database import SessionLocal
 from models import User, Rides
-from utils import create_ride_and_try_match  # 👈 import from utils
+from utils import create_ride_and_try_match, cancel_active_ride  # 👈 import from utils
 
 
 
@@ -27,6 +25,10 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
 # -----------------------
 # Helpers
 # -----------------------
@@ -34,8 +36,6 @@ app = FastAPI()
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")  # e.g. "whatsapp:+1415xxxxxxx"
-
-
 
 
 def generate_otp() -> str:
@@ -59,6 +59,14 @@ def send_verification_email(emory_email: str, code: str):
     smtp_user = os.getenv("SMTP_USER")
     smtp_pass = os.getenv("SMTP_PASS")
     from_email = os.getenv("FROM_EMAIL", smtp_user)
+
+
+    print(
+        "[EMAIL-DEBUG] Runtime env:",
+        "SMTP_USER:", repr(smtp_user),
+        "SMTP_PASS set?", bool(smtp_pass),
+        "FROM_EMAIL:", repr(from_email),
+    )
 
     if not smtp_user or not smtp_pass:
         # Fail gracefully in dev if not configured
@@ -208,7 +216,6 @@ async def sms_webhook(
 
     # If they type "cancel" -> cancel active ride instead of creating a new one
     if body.strip().lower() == "cancel":
-        from utils import cancel_active_ride  # put at top of file instead
         msg = cancel_active_ride(db, user)
         resp.message(msg)
         return Response(content=str(resp), media_type="application/xml")
