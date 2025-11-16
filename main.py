@@ -2,6 +2,7 @@ import os
 
 import random
 from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import FastAPI, Depends, Form
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -14,6 +15,7 @@ from email.message import EmailMessage
 import re
 from database import SessionLocal
 from models import User, Rides
+from models import User
 from utils import create_ride_and_try_match  # 👈 import from utils
 
 
@@ -102,12 +104,34 @@ TrypSync
 async def sms_webhook(
     From: str = Form(...),   # Twilio sends "From" as the sender's phone number
     Body: str = Form(""),    # Twilio sends "Body" as the message text
+    NumMedia: int = Form(0), # Number of media items from Twilio
+    MediaUrl0: Optional[str] = Form(None), # URL of the first media item
     db: Session = Depends(get_db),
 ):
     from_number = From.strip()
     body = (Body or "").strip()
     resp = MessagingResponse()
+    body = ""  # Initialize body as an empty string
 
+    # --- Speech-to-Text & Body Handling ---
+    # Check if a voice message was sent.
+    if NumMedia > 0 and MediaUrl0:
+        from utils import transcribe_audio_with_elevenlabs
+        print(f"Received voice message. Transcribing from {MediaUrl0}...")
+
+        transcribed_text = transcribe_audio_with_elevenlabs(MediaUrl0)
+        if transcribed_text:
+            body = transcribed_text.strip()
+        else:
+            # Handle transcription failure by sending a message back to the user.
+            resp.message("Sorry, I had trouble understanding your voice message. Could you please try sending a text message instead?")
+            return Response(content=str(resp), media_type="application/xml")
+    elif Body is not None:
+        # Fallback to the text message body if no media is present.
+        body = Body.strip()
+    else:
+        body = "" # Ensure body is a string if both are None
+    
     # 1) Get or create user by phone number.
     user = db.query(User).filter(User.phone_number == from_number).one_or_none()
     if user is None:

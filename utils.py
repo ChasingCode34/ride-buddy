@@ -1,10 +1,14 @@
 # utils.py
 
-import re
+
+import requests
 from datetime import datetime, timedelta
 from typing import Optional
 
+
+
 from sqlalchemy.orm import Session
+from elevenlabs.client import ElevenLabs
 
 # Adjust this import if you're using a package structure, e.g.:
 # from app.models import User, Rides
@@ -27,10 +31,15 @@ ALLOWED_LOCATIONS = {EMORY_NAME, AIRPORT_NAME}
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER")  # e.g. "whatsapp:+1415xxxxxxx"
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 twilio_client = None
 if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
     twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+elevenlabs_client = None
+if ELEVENLABS_API_KEY:
+    elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 
 def send_whatsapp_message(to_number: str, body: str) -> None:
@@ -51,6 +60,54 @@ def send_whatsapp_message(to_number: str, body: str) -> None:
     except Exception as e:
         print(f"[TWILIO] Error sending WhatsApp message to {to_number}: {e}")
 
+def transcribe_audio_with_elevenlabs(audio_url: str) -> Optional[str]:
+    from io import BytesIO
+
+    if not elevenlabs_client:
+        print("[ELEVENLABS] API client not configured. Skipping transcription.")
+        return None
+
+    try:
+        print(f"[ELEVENLABS] Downloading audio from: {audio_url}")
+        auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        resp = requests.get(audio_url, auth=auth)
+        resp.raise_for_status()
+        audio_data = resp.content
+
+        audio_file = BytesIO(audio_data)
+
+        print("[ELEVENLABS] Transcribing audio with Scribe...")
+        # **Use model_id, not model**
+        result = elevenlabs_client.speech_to_text.convert(
+            file=audio_file,
+            model_id="scribe_v1"
+        )
+
+        # The API returns a JSON-like object with a "text" field. :contentReference[oaicite:2]{index=2}  
+        transcript = None
+        if isinstance(result, dict):
+            transcript = result.get("text", "")
+        else:
+            # In case result isn't a dict (but likely it is)
+            try:
+                transcript = getattr(result, "text", "")
+            except Exception:
+                transcript = str(result)
+
+        transcript = transcript or ""
+        print(f"[ELEVENLABS] Transcription result: '{transcript}'")
+        return transcript
+
+    except requests.exceptions.RequestException as e:
+        print(f"[ELEVENLABS] Failed to download audio file: {e}")
+        return None
+    except Exception as e:
+        print(f"[ELEVENLABS] Error during transcription: {e}")
+        return None
+
+
+
+
 def build_sms_deeplink(phone_number: str) -> str:
     """
     Convert something like 'whatsapp:+14045551234' or '+14045551234'
@@ -63,18 +120,17 @@ def build_sms_deeplink(phone_number: str) -> str:
 
 
 def _get_gemini_model():
-    """
-    Lazily configure and return a Gemini model instance.
-    """
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        # In dev, fail gracefully if key is missing
         print("[GEMINI] GEMINI_API_KEY is not set; falling back to None.")
         return None
 
+    print("[GEMINI] GEMINI_API_KEY found, configuring client.")
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-2.5-flash")
     return model
+
 
 def _extract_json_from_text(text: str) -> Optional[dict]:
     """
